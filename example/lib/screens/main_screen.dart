@@ -5,9 +5,16 @@ import 'package:intl/intl.dart';
 
 import '../purchase_observer.dart';
 import '../widgets/list_components.dart';
-import 'paywall_screen.dart';
+
+typedef OnAdaptyErrorCallback = void Function(AdaptyError error);
+typedef OnCustomErrorCallback = void Function(Object error);
 
 class MainScreen extends StatefulWidget {
+  const MainScreen({super.key, required this.adaptyErrorCallback, required this.customErrorCallback});
+
+  final OnAdaptyErrorCallback adaptyErrorCallback;
+  final OnCustomErrorCallback customErrorCallback;
+
   @override
   _MainScreenState createState() => _MainScreenState();
 }
@@ -31,7 +38,7 @@ class _MainScreenState extends State<MainScreen> {
 
     _subscribeForEvents();
 
-    Future.delayed(Duration.zero, () {
+    Future.delayed(Duration(seconds: 1), () {
       this._initialize();
     });
   }
@@ -42,37 +49,20 @@ class _MainScreenState extends State<MainScreen> {
     });
   }
 
-  Future<void> _showErrorDialog(String title, String message, String? details) {
-    return showCupertinoDialog(
-      context: context,
-      builder: (ctx) => CupertinoAlertDialog(
-        title: Text(title),
-        content: Column(
-          children: [
-            Text(message),
-            if (details != null) Text(details),
-          ],
-        ),
-        actions: [
-          CupertinoButton(
-              child: Text('OK'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              }),
-        ],
-      ),
-    );
-  }
-
   void _subscribeForEvents() {
     observer.onAdaptyErrorOccurred = (error) {
-      if (error.code == AdaptyErrorCode.paymentCancelled) return;
+      switch (error.code) {
+        case AdaptyErrorCode.paymentCancelled:
+          return;
+        default:
+          break;
+      }
 
-      _showErrorDialog('Adapty Error ${error.code}', error.message, error.detail);
+      widget.adaptyErrorCallback(error);
     };
 
     observer.onUnknownErrorOccurred = (error) {
-      _showErrorDialog('Unknown Error', error.toString(), null);
+      widget.customErrorCallback(error);
     };
 
     Adapty().didUpdateProfileStream.listen((profile) {
@@ -204,22 +194,32 @@ class _MainScreenState extends State<MainScreen> {
     );
   }
 
-  List<Widget> _paywallContents(AdaptyPaywall paywall, List<AdaptyPaywallProduct>? products, void Function(AdaptyPaywallProduct) onProductTap, void Function() onLogShowTap) {
+  List<Widget> _paywallContents(
+    AdaptyPaywall paywall,
+    List<AdaptyPaywallProduct>? products,
+    void Function(AdaptyPaywallProduct) onProductTap,
+    void Function() onLogShowTap,
+  ) {
     return [
       ListTextTile(title: 'Variation', subtitle: paywall.variationId),
       ListTextTile(title: 'Revision', subtitle: '${paywall.revision}'),
-      ListTextTile(title: 'Locale', subtitle: '${paywall.locale}'),
+      ListTextTile(title: 'Locale', subtitle: '${paywall.remoteConfig?.locale}'),
       if (products == null) ...paywall.vendorProductIds.map((e) => ListTextTile(title: e)),
       if (products != null)
-        ...products.map((p) => ListActionTile(
-              title: p.vendorProductId,
-              subtitle: p.price.localizedString,
+        ...products.map((p) => ListProductTile(
+              product: p,
               onTap: () => onProductTap(p),
             )),
       ListActionTile(
         title: 'Log Show Paywall',
         onTap: () => onLogShowTap(),
-      )
+      ),
+      ListActionTile(
+        title: 'Set Variation Id',
+        onTap: () async {
+          await observer.callSetVariationId('test_transaction_id', paywall.variationId);
+        },
+      ),
     ];
   }
 
@@ -294,12 +294,6 @@ class _MainScreenState extends State<MainScreen> {
           ListActionTile(
             title: 'Refresh',
             onTap: () => _loadExamplePaywall(),
-          ),
-          ListActionTile(
-            title: 'Present Paywall',
-            onTap: () {
-              Navigator.of(context).push(CupertinoPageRoute(builder: (ctx) => PaywallScreen(paywall: paywall)));
-            },
           ),
         ],
       );
@@ -411,6 +405,12 @@ class _MainScreenState extends State<MainScreen> {
             _setIsLoading(false);
           },
         ),
+        ListActionTile(
+          title: 'Present Code Redemption Sheet',
+          onTap: () async {
+            await observer.callPresentCodeRedemptionSheet();
+          },
+        ),
       ],
     );
   }
@@ -457,20 +457,11 @@ class _MainScreenState extends State<MainScreen> {
   }
 
   Future<void> _reloadProfile() async {
-    setState(() {
-      this.loading = true;
-    });
-
     final profile = await observer.callGetProfile();
 
     if (profile != null) {
       setState(() {
         this.adaptyProfile = profile;
-        this.loading = false;
-      });
-    } else {
-      setState(() {
-        this.loading = false;
       });
     }
   }
@@ -503,12 +494,20 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _purchaseProduct(AdaptyPaywallProduct product) async {
     _setIsLoading(true);
 
-    final profile = await observer.callMakePurchase(product);
+    final purchaseResult = await observer.callMakePurchase(product);
 
-    if (profile != null) {
-      setState(() {
-        this.adaptyProfile = profile;
-      });
+    switch (purchaseResult) {
+      case AdaptyPurchaseResultSuccess(profile: final profile):
+        setState(() {
+          this.adaptyProfile = profile;
+        });
+        break;
+      case AdaptyPurchaseResultUserCancelled():
+        break;
+      case AdaptyPurchaseResultPending():
+        break;
+      default:
+        break;
     }
 
     _setIsLoading(false);
@@ -523,7 +522,9 @@ class _MainScreenState extends State<MainScreen> {
       ..setBirthday(DateTime(1990, 5, 14))
       ..setGender(AdaptyProfileGender.female)
       ..setEmail('example@adapty.io')
-      ..setAirbridgeDeviceId("D6203965-5F2E-4F4C-A6E0-E3944EA9EAD4");
+      ..setAirbridgeDeviceId("D6203965-5F2E-4F4C-A6E0-E3944EA9EAD4")
+      ..setCustomStringAttribute('test_string_value', 'test_string_key')
+      ..setCustomDoubleAttribute(123.45, 'test_double_key');
 
     await observer.callUpdateProfile(builder.build());
 
@@ -533,7 +534,14 @@ class _MainScreenState extends State<MainScreen> {
   Future<void> _updateAttribution() async {
     _setIsLoading(true);
 
-    await observer.callUpdateAttribution({'key1': 'value1', 'key2': 'value2'}, AdaptyAttributionSource.custom, '123456');
+    await observer.callUpdateAttribution(
+      {
+        'test': 123,
+        'key2': 'value2',
+      },
+      AdaptyAttributionSource.custom,
+      '123456',
+    );
 
     _setIsLoading(false);
   }

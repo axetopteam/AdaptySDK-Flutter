@@ -1,10 +1,10 @@
 name: adapty_flutter_example
 description: Demonstrates how to use the adapty_flutter plugin.
-version: 2.10.4
+version: 3.2.1
 publish_to: none
 
 environment:
-  sdk: ">=2.12.0 <4.0.0"
+  sdk: ">=3.0.0 <4.0.0"
 
 dependencies:
   flutter:
@@ -17,6 +17,7 @@ dependencies:
   shared_preferences: ^2.0.15
   uuid: ^3.0.4
   intl: ^0.17.0
+  url_launcher:
 
 dev_dependencies:
   flutter_test:
